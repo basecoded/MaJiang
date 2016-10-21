@@ -1,0 +1,33 @@
+package com.zxz.service;
+
+import org.json.JSONObject;
+
+/**向外部提供数据的接口
+ * @author Administrator
+ *
+ */
+public interface DateService {
+
+	
+	/**得到在线
+	 * @return
+	 */
+	JSONObject getGameJSONObject();
+	
+	/**得到房间的map
+	 * @return
+	 */
+	JSONObject getRoomJSONObject();
+	
+	/**总的在线人数
+	 * @return
+	 */
+	int getTotalOneLineUser();
+	
+	
+	/**实时在线登录数
+	 * @return
+	 */
+	int getTotalLoginLineUser();
+	
+}

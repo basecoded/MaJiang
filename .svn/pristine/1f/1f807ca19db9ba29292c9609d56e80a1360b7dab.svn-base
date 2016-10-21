@@ -1,0 +1,93 @@
+package com.zxz.controller;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectOutputStream;
+import java.util.Scanner;
+
+import org.apache.mina.common.ByteBuffer;
+import org.apache.mina.common.IoHandler;
+import org.apache.mina.common.IoHandlerAdapter;
+import org.apache.mina.common.IoSession;
+import org.json.JSONObject;
+
+import com.zxz.protobuf.Response.responseStr;
+
+import domain.TestUser;
+
+public class ClientHandler extends IoHandlerAdapter implements IoHandler {
+
+	SendMessageThread sendMessageThread;
+
+	@Override
+	public void sessionOpened(IoSession session) throws Exception {
+		sendMessageThread = new SendMessageThread(session);
+		Thread thread = new Thread(sendMessageThread);
+		thread.start();
+	}
+
+	@Override
+	public void messageReceived(IoSession session, Object message)
+			throws Exception {
+		System.out.println(message);
+		//String ms = URLDecoder.decode(message.toString(),"utf-8");
+//		TestUser testUser = (TestUser)message;
+//		System.out.println("接收:"+message);
+//		System.out.println(message.getClass());
+//		ByteBuffer buffer = (ByteBuffer)message;
+//		byte[] bytess = new byte[buffer.limit()];
+//		System.out.println(message.getClass());
+//		byte[] bytes = toByteArray(message);
+//		System.out.println("接收的长度:"+bytes.length);
+//		responseStr parseFrom = responseStr.parseFrom(bytes);
+//		System.out.println(parseFrom);
+//		System.out.println("服务器："+message.getClass());
+	}
+	
+	 /**  
+     * 对象转数组  
+     * @param obj  
+     * @return  
+     */  
+    public byte[] toByteArray (Object obj) {      
+        byte[] bytes = null;      
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();      
+        try {        
+            ObjectOutputStream oos = new ObjectOutputStream(bos);         
+            oos.writeObject(obj);        
+            oos.flush();         
+            bytes = bos.toByteArray ();      
+            oos.close();         
+            bos.close();        
+        } catch (IOException ex) {        
+            ex.printStackTrace();   
+        }      
+        return bytes;    
+    }   
+	
+	static class SendMessageThread implements Runnable {
+		IoSession session;
+		public static boolean isLogin = false;
+		int roomId;
+		
+		public SendMessageThread(IoSession session) {
+			super();
+			this.session = session;
+		}
+		
+		@Override
+		public void run() {
+			JSONObject jsonObject = new JSONObject();
+			jsonObject.put("method", "login");
+			jsonObject.put("unionid", "obhqFxAmLRLMv1njQnWFsl_npjPw");
+			session.write(jsonObject.toString());
+			Scanner scanner = new Scanner(System.in);
+			while (true) {
+				System.out.println("请输入发送的命令:");
+				String send = scanner.nextLine();
+				session.write(send);
+			}
+		}
+	}
+}
+

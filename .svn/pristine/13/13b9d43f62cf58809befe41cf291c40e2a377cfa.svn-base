@@ -1,0 +1,34 @@
+package com.zxz.dao;
+
+import com.zxz.domain.UserScore;
+
+public class UserScoreDao extends BaseDao<UserScore>{
+
+	static UserScoreDao userScoreDao;
+	
+	private UserScoreDao() {
+	}
+	
+	public static UserScoreDao getInstance(){
+		if(userScoreDao!=null){
+			return userScoreDao;
+		}else{
+			synchronized (UserScoreDao.class) {
+				userScoreDao = new UserScoreDao();
+				return userScoreDao;
+			}
+		}
+	}
+	
+	/**±£¥Ê”√ªß
+	 * @param user
+	 * @return
+	 */
+	public int saveUserScore(UserScore userScore) {
+		int id = super.insert("UserScore.save", userScore);
+		return id;
+	}
+	
+	
+	
+}

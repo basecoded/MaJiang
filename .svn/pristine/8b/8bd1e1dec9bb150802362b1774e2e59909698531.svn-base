@@ -1,0 +1,68 @@
+package com.zxz.service;
+
+import org.json.JSONObject;
+
+public class DateServiceImpl implements DateService {
+
+	/**
+	 * 总的在线用户
+	 */
+	public static int totalOnLineUser = 0;
+	
+	/**
+	 *总的登录用户 
+	 */
+	public static int totalLoginUser = 0;
+	
+	
+	/**
+	 * 用户建立连接的时候，增加在线的用户数
+	 */
+	public void addOnLineUser(){
+		totalOnLineUser ++;
+	}
+	
+	
+	/**
+	 * 用户离线的时候,减少在线的用户数
+	 */
+	public void subOnLineUser(){
+		totalOnLineUser --;
+	}
+	
+	
+	/**
+	 * 用户登录的时候添加用户数
+	 */
+	public void addLoginUser(){
+		totalLoginUser ++;
+	}
+	
+	/**
+	 * 如果用户在登录状态离线的时候减小登录数
+	 */
+	public void subLoginUser(){
+		totalLoginUser --;
+	}
+	
+	@Override
+	public int getTotalOneLineUser() {
+		return totalOnLineUser;
+	}
+
+	@Override
+	public int getTotalLoginLineUser() {
+		return totalLoginUser;
+	}
+
+	@Override
+	public JSONObject getGameJSONObject() {
+		return null;
+	}
+
+	@Override
+	public JSONObject getRoomJSONObject() {
+		return null;
+	}
+
+}

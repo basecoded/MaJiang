@@ -1,0 +1,22 @@
+package com.zxz.service;
+
+import java.util.Map;
+
+import com.zxz.controller.GameManager;
+import com.zxz.controller.RoomManager;
+import com.zxz.domain.Game;
+import com.zxz.domain.OneRoom;
+
+public class DateServiceImpl implements DateService {
+
+	@Override
+	public Map<String, Game> getGameMap() {
+		return GameManager.getGameMap();
+	}
+
+	@Override
+	public Map<String, OneRoom> getRoomMap() {
+		return RoomManager.getRoomMap();
+	}
+
+}

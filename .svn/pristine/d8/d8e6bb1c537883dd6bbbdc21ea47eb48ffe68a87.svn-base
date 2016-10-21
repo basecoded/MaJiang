@@ -1,0 +1,25 @@
+package com.zxz.service;
+
+import java.util.Map;
+
+import com.zxz.domain.Game;
+import com.zxz.domain.OneRoom;
+
+/**向外部提供数据的接口
+ * @author Administrator
+ *
+ */
+public interface DateService {
+
+	/**得到在线
+	 * @return
+	 */
+	Map<String,Game> getGameMap();
+	
+	
+	/**得到房间的map
+	 * @return
+	 */
+	Map<String,OneRoom> getRoomMap();
+	
+}

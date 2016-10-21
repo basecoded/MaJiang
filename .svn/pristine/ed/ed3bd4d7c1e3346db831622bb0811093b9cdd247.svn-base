@@ -1,0 +1,66 @@
+package com.zxz.service;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.mina.common.IoSession;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.Test;
+
+import com.zxz.dao.SumScoreDao;
+import com.zxz.domain.SumScore;
+import com.zxz.domain.User;
+import com.zxz.utils.Constant;
+import com.zxz.utils.DateUtils;
+
+public class ScoreService implements Constant{
+	SumScoreDao sumScoreDao = SumScoreDao.getInstance();
+	
+	/**得到用户的战绩
+	 * @param jsonObject
+	 * @param session
+	 */
+	@Test
+	public void getUserScore(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		int index = jsonObject.getInt("index");
+		int pageSzie = 10;
+		Map<String, Object> map = new HashMap<>();
+		map.put("userid", user.getId());
+		map.put("pageIndex", (index-1)*pageSzie);
+		map.put("pageSize", pageSzie);
+		List<SumScore> sumScoreList = sumScoreDao.findSumScore(map);
+		JSONObject outJSONObject = new JSONObject();
+		JSONArray scoreArray = new JSONArray();
+		for(int i=0;i<sumScoreList.size();i++){
+			SumScore sumScore = sumScoreList.get(i);
+			JSONObject score = new JSONObject();
+			score.put("zhongMa", sumScore.getZhongMaTotal());
+			score.put("roomNumber", sumScore.getRoomNumber());
+			score.put("huPaiTotal", sumScore.getHuPaiTotal());
+			score.put("jieGangTotal", sumScore.getJieGangTotal());
+			score.put("anGangTotal", sumScore.getAnGangTotal());
+			score.put("zhongMaTotal", sumScore.getZhongMaTotal());
+			score.put("finalScore", sumScore.getFinalScore());
+			score.put("fangGangTotal", sumScore.getFangGangTotal());
+			score.put("mingGangtotal", sumScore.getMingGangtotal());
+			score.put("createDate", DateUtils.getFormatDate(sumScore.getCreateDate(), "yyyy/MM/dd hh:mm:ss"));
+			scoreArray.put(score);
+		}
+		outJSONObject.put("userScores", scoreArray);
+		outJSONObject.put(method, "getUserScore");
+		outJSONObject.put(discription, "得到用户的战绩");
+		System.out.println(outJSONObject);
+	}
+	
+	
+	public static void main(String[] args) {
+		ScoreService scoreService = new ScoreService();
+		JSONObject jsonObject = new JSONObject();
+		jsonObject.put("index", 1);
+		scoreService.getUserScore(jsonObject, null);
+	}
+	
+}

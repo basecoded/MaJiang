@@ -1,0 +1,1334 @@
+package com.zxz.service;
+
+import java.net.SocketAddress;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.log4j.Logger;
+import org.apache.mina.common.IoSession;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.Test;
+
+import com.zxz.controller.GameManager;
+import com.zxz.controller.RoomManager;
+import com.zxz.dao.OneRoomDao;
+import com.zxz.dao.UserDao;
+import com.zxz.domain.Game;
+import com.zxz.domain.OneRoom;
+import com.zxz.domain.User;
+import com.zxz.utils.CardsMap;
+import com.zxz.utils.Constant;
+import com.zxz.utils.CountDownThread;
+import com.zxz.utils.NotifyTool;
+import com.zxz.utils.WeiXinUtil;
+
+
+
+
+public class UserService extends BasePlay implements PlayOfHongZhong,Constant{
+
+	private static Logger logger = Logger.getLogger(UserService.class);  
+	
+	OneRoomDao roomDao = OneRoomDao.getInstance();
+	UserDao userDao = UserDao.getInstance();
+	PlayGameService playGameService = new PlayGameService();
+	DateServiceImpl dateService = new DateServiceImpl();//统计相关
+	
+	/**登录
+	 * @param jsonObject
+	 * @param session
+	 * @return
+	 */
+	public boolean login(JSONObject jsonObject, IoSession session) {
+		boolean hasUnionid = jsonObject.has("unionid");//是否含有hasUnionid
+		boolean loginResult = false;
+		if(hasUnionid){
+			loginResult =  loginWithUnionid(jsonObject, session);
+		}else{
+			loginResult=  loginWithCode(jsonObject, session);
+		}
+		//用户登录的时候添加用户数
+		if(loginResult){
+			dateService.addLoginUser();
+		}
+		return loginResult;
+	}
+
+	/**用unionid登录,说明用户已经注册过
+	 * @param jsonObject
+	 * @param session
+	 * @return
+	 */
+	private boolean loginWithUnionid(JSONObject jsonObject, IoSession session) {
+		String unionid =  jsonObject.getString("unionid");
+		
+		switch (unionid) {
+			case "obhqFxAmLRLMv1njQnWFsl_npjPw"://顾双
+			case "obhqFxIRabSd9B2qhT_ThzsXMU58"://周益雄
+			case "obhqFxCzFVH5UkKJRIH-AqePEnZ8"://张森
+			case "obhqFxHtB3emb506Q-FsZwW4_Py4"://尤海涛
+				User user = new User();
+				user.setUnionid(unionid);;
+				user = userDao.findUser2(user);
+				testLogin(unionid,session);
+			return true;
+		}
+		User user = new User();
+		user.setUnionid(unionid);;
+		user = userDao.findUser2(user);
+		if(user!=null){
+			String refreshToken = user.getRefreshToken();
+			try {
+				String accesstoekn = WeiXinUtil.getAccessTokenWithRefreshToken(refreshToken);
+				JSONObject userInfo = WeiXinUtil.getUserInfo(accesstoekn, user.getOpenid());
+				setUserWithUserInfoJson(userInfo, user);//封装用户的信息
+				notifyUserLoginSuccess(user, session,false);
+				return true;
+			} catch (Exception e) {
+				e.printStackTrace();
+				notifyUserLoginFail(session,"errorRefreshToken","微信refreshToken过期请重新授权");
+				logger.fatal("微信refreshToken过期");
+				return false;
+			}
+		}else{
+			notifyUserLoginFail(session,"errorUnionId","unionId不存在");
+			return false;
+		}
+		
+	}
+
+
+	private void testLogin(String unionid,IoSession session) {
+		User user = new User();
+		user.setUnionid(unionid);;
+		user = userDao.findUser2(user);
+		if(user!=null){
+			try {
+				JSONObject userInfo = new JSONObject();
+				userInfo.put("userId",user.getId());
+				userInfo.put("userName",user.getNickName());
+				//userInfo.put("headimgurl","http://img.pconline.com.cn/images/upload/upc/tx/wallpaper/1212/06/c1/16396010_1354784049718.jpg");
+				user.setHeadimgurl("http://img.pconline.com.cn/images/upload/upc/tx/wallpaper/1212/06/c1/16396010_1354784049718.jpg");
+				userInfo.put("roomCard",user.getRoomCard());//剩余的房卡数
+				userInfo.put("unionid",user.getUnionid());//唯一的unionid
+				userInfo.put("nickname",user.getUserName());//唯一的unionid
+				notifyUserLoginSuccess(user, session,false);
+			} catch (Exception e) {
+				e.printStackTrace();
+				notifyUserLoginFail(session,"errorRefreshToken","微信refreshToken过期请重新授权");
+				logger.fatal("微信refreshToken过期");
+			}
+		}else{
+			notifyUserLoginFail(session,"errorUnionId","unionId不存在");
+		}
+	}
+
+	/**用code登录
+	 * @param jsonObject
+	 * @param session
+	 * @return
+	 */
+	private boolean loginWithCode(JSONObject jsonObject, IoSession session) {
+		String code = jsonObject.getString("code");
+		try {
+			JSONObject accessTokenJson = WeiXinUtil.getAccessTokenJson(code);
+			String refreshToken = accessTokenJson.getString("refresh_token");
+			String openid = accessTokenJson.getString("openid");
+			String accesstoken = accessTokenJson.getString("access_token");
+			JSONObject userInfoJson = WeiXinUtil.getUserInfo(accesstoken, openid);
+			String openId  = userInfoJson.getString("openid");
+			User findUser = new User();
+			findUser.setOpenid(openId);
+			User user = userDao.findUser2(findUser);
+			findUser.setRefreshToken(refreshToken);
+			setUserWithUserInfoJson(userInfoJson, findUser);//封装用户的信息
+			boolean isFirstLogin = true;
+			if(user==null){//没有注册
+				registUser(userInfoJson, findUser);
+			}else{//已经注册获取用户的房卡数量
+				//修改用户的refreshToken
+				User modifyUser = new User();
+				modifyUser.setId(user.getId());
+				modifyUser.setRefreshToken(refreshToken);
+				userDao.modifyUser(modifyUser);
+				findUser.setId(user.getId());
+				findUser.setRoomCard(user.getRoomCard());
+				findUser.setRoomId(user.getRoomId());
+				isFirstLogin = false;//不是第一次登陆
+			}
+			session.setAttribute("user", findUser);
+			notifyUserLoginSuccess(findUser,session,isFirstLogin);
+		} catch (Exception e) {
+			e.printStackTrace();
+			notifyUserLoginFail(session,"errorCode","CODE传递不正确");
+			logger.info("微信登录失败");
+			return false;
+		}
+		return true;
+	}
+
+
+	/**通知用户登录失败
+	 * @param session
+	 */
+	private void notifyUserLoginFail(IoSession session,String errorCode,String discription) {
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put("login", false);
+		outJsonObject.put("method", "login");
+		outJsonObject.put("errorCode", errorCode);
+		outJsonObject.put(UserService.discription, discription);
+		session.write(outJsonObject.toString());
+	}
+
+
+	/**通知用户登录成功
+	 * @param findUser
+	 * @param session 
+	 * @param isFirstLogin 是否第一次注册
+	 */
+	private void notifyUserLoginSuccess(User findUser, IoSession session,boolean isFirstLogin) {
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put("method", "login");
+		findUser.setIoSession(session);
+		session.setAttribute("user", findUser);
+		outJsonObject.put("login", true);
+		outJsonObject.put("userId",findUser.getId());
+		outJsonObject.put("userName",findUser.getNickName());
+		outJsonObject.put("headimgurl",findUser.getHeadimgurl());
+		outJsonObject.put("roomCard",findUser.getRoomCard());//剩余的房卡数
+		outJsonObject.put("unionid",findUser.getUnionid());//唯一的unionid
+		outJsonObject.put("isFirstLogin",isFirstLogin);//是否第一次登陆，也就是注册
+		outJsonObject.put("sex",findUser.getSex());//性别
+		outJsonObject.put("description", "登录成功!");
+		String remoteAddress = session.getRemoteAddress().toString();
+		outJsonObject.put("ip", remoteAddress.replaceAll("/", ""));//ip地址
+		session.write(outJsonObject.toString());
+	}
+
+	/**注册用户
+	 * @param userInfoJson
+	 * @param findUser
+	 */
+	private void registUser(JSONObject userInfoJson, User findUser) {
+		//设置用户默认的房卡数量
+		findUser.setRoomCard(DEFAULT_USER_REGIST_ROOMCARD);
+		findUser.setCreateDate(new Date());
+		userDao.saveUser(findUser);
+	}
+
+
+	/**封装用户的信息
+	 * @param userInfoJson
+	 * @param findUser
+	 */
+	private void setUserWithUserInfoJson(JSONObject userInfoJson, User findUser) {
+		logger.info("userInfoJson:"+userInfoJson);
+		String nickName = userInfoJson.getString("nickname");//昵称
+		String unionid = userInfoJson.getString("unionid");
+		String city = userInfoJson.getString("city");//城市
+		String headimgurl = userInfoJson.getString("headimgurl");//头像
+		String province = userInfoJson.getString("province");//省份
+		int sex = userInfoJson.getInt("sex");//性别
+//		String refreshToken = userInfoJson.getString("refresh_token");
+		findUser.setCity(city);
+		findUser.setHeadimgurl(headimgurl);
+		findUser.setUnionid(unionid);
+		findUser.setNickName(nickName);
+		findUser.setProvince(province);
+		findUser.setSex(sex+"");
+//		findUser.setRefreshToken(refreshToken);
+	}
+
+
+	private boolean login1(JSONObject jsonObject, IoSession session) {
+		String userName = jsonObject.getString("userName");
+		String password = jsonObject.getString("password");
+		User user = new User(userName, password);
+		User findUser;
+		if(!userName.equals("")){//线上
+			findUser = userDao.findUser2(user);
+		}else{
+			findUser = userDao.findUser(user);
+		}
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put("method", "login");
+		if(findUser!=null){
+			//SocketManager.addIoSession(user.getId()+"", session);
+			findUser.setIoSession(session);
+			session.setAttribute("user", findUser);
+			outJsonObject.put("login", true);
+			outJsonObject.put("userId",findUser.getId());
+			outJsonObject.put("userName",findUser.getUserName());
+			outJsonObject.put("description", "登录成功!");
+			System.out.println(session.getClass());
+			session.write(outJsonObject.toString());
+			//检测用户是否掉线
+			//new UserDroppedService(session);
+			return true;
+		}else{
+			outJsonObject.put("login", false);
+			outJsonObject.put("description", "登录失败,用户名或密码错误!");
+			session.write(outJsonObject.toString());
+			return false;
+		}
+	}
+	
+
+	/**创建房间
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void createRoom(JSONObject jsonObject, IoSession session) {
+		boolean result = checkUserCanCreateRoom(jsonObject,session);
+		if(result){
+			realCreateRoom(jsonObject, session);
+		}else{
+			notifyUserCanNotCreateRoom(session);
+		}
+	}
+
+
+	/**通知用户不可以创建房间
+	 * @param session
+	 */
+	private void notifyUserCanNotCreateRoom(IoSession session) {
+		JSONObject outJSONObject = new JSONObject();
+		outJSONObject.put(code, error);
+		outJSONObject.put(method, "createRoom");
+		outJSONObject.put(discription, "房卡数量不足");
+		session.write(outJSONObject.toString());
+	}
+	
+	/**检测用户是否可以创建房间
+	 * @param session
+	 * @return true 可以 false 不可以
+	 */
+	private boolean checkUserCanCreateRoom(JSONObject jsonObject,IoSession session) {
+		User user = (User) session.getAttribute("user");
+		int total = jsonObject.getInt("total");//局数
+		int id = user.getId();
+		User findUser = userDao.findUserByUserId(id);
+		int roomCard = findUser.getRoomCard();//房卡的数量
+		user.setRoomCard(roomCard);
+		int consumeCardNum = 1; 
+		if(total>=16){
+			consumeCardNum =2;
+		}
+		if(roomCard>=consumeCardNum){
+			return true;
+		}
+		return false;
+	}
+
+
+	/**在进行验证完之后,用户可以创建房间
+	 * @param jsonObject
+	 * @param session
+	 */
+	private void realCreateRoom(JSONObject jsonObject, IoSession session) {
+		int total = jsonObject.getInt("total");//局数
+		int zhama = jsonObject.getInt("zhama");//扎码数
+		OneRoom room = new OneRoom();
+		room.setCreateDate(new Date());//房间创建时间
+		room.setTotal(total);
+		room.setZhama(zhama);
+		User user = (User) session.getAttribute("user");
+		room.setCreateUserId(user.getId());//创建人的ID,房主 
+		int roomId = roomDao.saveRoom(room);
+		room.setId(roomId);
+		room.setRoomNumber(roomId);//设置房间号
+		room.setCreateUser(user);//创建房间的人
+		user.setDirection("east");
+		user.setBanker(true);//房主 庄家
+		user.setRoomId(roomId+"");
+		user.setCurrentGame(0);
+		user.setAuto(false);//不是自动准备
+		room.addUser(user);
+		RoomManager.addRoomMap(roomId+"", room);
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put("method", "createRoom");
+		outJsonObject.put(code, true);//创建成功
+		outJsonObject.put("roomId", roomId);
+		outJsonObject.put(direction, user.getDirection());
+		outJsonObject.put("description", "创建房间成功!");
+		session.write(outJsonObject.toString());
+	}
+
+	/**进入房间
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void enterRoom(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		boolean isUserInRoom = checkUserIsInRoom(user);
+		if(!isUserInRoom){//用户没有在房间里
+			realEnterRoom(jsonObject, session);//可以进入房间
+		}
+	}
+
+	
+	/**得到房间里的信息，并且替换掉死去的session,并且通知玩家当前的游戏信息
+	 * @param user
+	 */
+	public static JSONObject getRoomInfo(User user) {
+		Game game = GameManager.getGameWithRoomNumber(user.getRoomId());
+		JSONObject roomInfoJson = null ;
+		if(game!=null){//游戏已经开始
+			int gameStatus = game.getGameStatus();
+			if(gameStatus==GAGME_STATUS_OF_IS_GAMING){
+				roomInfoJson= getRoomInfoGaming(user, game);
+			}else if(gameStatus==GAGME_STATUS_OF_WAIT_START){
+				roomInfoJson = getRoomInfoGameWait(user, game);
+			}else{
+				logger.fatal("得到游戏信息时候除了这两个难道还有别的吗?应该永远不会进入到这个逻辑里面吧");
+			}
+		}
+		return roomInfoJson;
+	}
+	
+	/**游戏准备中，得到房间的信息 
+	 * @param user
+	 * @param game
+	 * @return
+	 */
+	private static JSONObject getRoomInfoGameWait(User user, Game game) {
+		List<User> userList = game.getRoom().getUserList();
+		JSONArray userJsonArray = new JSONArray();
+		int bankUserId = getBankUserId(userList);//庄家的userid
+		OneRoom room = game.getRoom();
+		for(int i=0;i<userList.size();i++){
+			JSONObject userJSONObject = new JSONObject();
+			User u = userList.get(i);
+			boolean ready = u.isReady();
+			userJSONObject.put("ready", ready);
+			boolean auto = u.isAuto();
+			userJSONObject.put("isAuto", auto);
+			userJSONObject.put("userid", u.getId());
+			userJSONObject.put("userName", u.getUserName());
+			userJSONObject.put("headimgurl", u.getHeadimgurl());
+			userJSONObject.put("direction", u.getDirection());
+			userJSONObject.put("ready", u.isReady());
+			userJsonArray.put(userJSONObject);
+		}
+		JSONObject infoJsonObject = new JSONObject();
+		int totalGame = game.getTotalGame();//总共的局数
+		int alreadyTotalGame = game.getAlreadyTotalGame();//已经玩的局数
+		infoJsonObject.put("totalGame", totalGame);
+		infoJsonObject.put("alreadyTotalGame", alreadyTotalGame);
+		infoJsonObject.put("users", userJsonArray);
+		infoJsonObject.put(method, "userDropLine");
+		infoJsonObject.put(type, "gameForReady");
+		infoJsonObject.put("bankUserId", bankUserId);
+		infoJsonObject.put("roomId", room.getRoomNumber()); //房间号
+		infoJsonObject.put("zhamaNum", room.getZhama());//扎码数
+		infoJsonObject.put("remainCardsTotal", game.getRemainCards().size());//剩余的牌数
+		return infoJsonObject;
+	}
+
+	/**替换掉用户的ioSession
+	 * @param user
+	 * @param oneRoom 房间
+	 */
+	private static void replaceUserIoSession(User user, OneRoom oneRoom) {
+		List<User> userList = oneRoom.getUserList();
+		for (int i = 0; i < userList.size(); i++) {
+			User u = userList.get(i);
+			if(u.getId() == user.getId()){
+				u.setIoSession(user.getIoSession());
+				user.setDirection(u.getDirection());//方向也变
+				user.setAuto(u.isAuto());//是否托管
+				user.setRoomId(u.getRoomId());//房间号传过来
+				user.setCards(u.getCards());//牌改变过来
+			}
+		}
+	}
+	
+	
+	/**游戏进行中，通知玩家
+	 * @param roomInfoJson
+	 * @param user
+	 */
+	private static void nofiyUserRoomInfo(JSONObject roomInfoJson, User user) {
+		NotifyTool.notify(user.getIoSession(), roomInfoJson);;
+	}
+	
+
+	/**断线重连的时候游戏没有开始,
+	 * @param user
+	 * @param oneRoom
+	 */
+	private static void gameNotStartReplaceUserSession(User user, OneRoom oneRoom) {
+		JSONObject outJsonObject = new JSONObject();
+		getRoomInfo(outJsonObject , oneRoom);
+		outJsonObject.put("method", "enterRoom");
+		outJsonObject.put("code", "success");
+		NotifyTool.notify(user.getIoSession(), outJsonObject);//通知他本人房间里的信息
+		replaceRoomSession(oneRoom, user);
+	}
+
+	
+	/**替换掉原来用户
+	 * @param oneRoom
+	 * @param user
+	 */
+	public static void replaceRoomSession(OneRoom oneRoom,User user){
+		List<User> userList = oneRoom.getUserList();
+		for(int i=0;i<userList.size();i++){
+			User u = userList.get(i);
+			if(u.getId()==user.getId()){
+				u.setIoSession(user.getIoSession());//替换它的ioSession
+			}
+		}
+	}
+	
+	
+	/**游戏已经开始(游戏进行中)
+	 * @param user
+	 * @param game
+	 */
+	private static JSONObject getRoomInfoGaming(User user, Game game) {
+		OneRoom room = game.getRoom();
+		JSONObject roomInfoJSONObject = new JSONObject();//房间信息
+		JSONArray userInfoJsonArray = new JSONArray();
+		roomInfoJSONObject.put("nowDirection", game.getDirec());
+		roomInfoJSONObject.put(method, "userDropLine");
+		roomInfoJSONObject.put(type, "gameStart");
+		roomInfoJSONObject.put("roomId", room.getRoomNumber()); //房间号
+		roomInfoJSONObject.put("zhamaNum", room.getZhama());//扎码数
+		roomInfoJSONObject.put("remainCardsTotal", game.getRemainCards().size());//剩余的牌数
+		List<User> userList = room.getUserList();
+		for(int i=0;i<userList.size();i++){
+			User u = userList.get(i);
+			JSONObject myInfo;
+			if(u.getId()==user.getId()){
+				myInfo = u.getMyInfo(true);
+			}else{
+				myInfo = u.getMyInfo(true);
+			}
+			userInfoJsonArray.put(myInfo);
+		}
+		
+		int totalGame = game.getTotalGame();//总共的局数
+		int bankUserId = getBankUserId(userList);//庄家的userid
+		int alreadyTotalGame = game.getAlreadyTotalGame();//已经玩的局数
+		roomInfoJSONObject.put("totalGame", totalGame);
+		roomInfoJSONObject.put("alreadyTotalGame", alreadyTotalGame);
+		roomInfoJSONObject.put("users", userInfoJsonArray);
+		roomInfoJSONObject.put("bankUserId", bankUserId);
+		roomInfoJSONObject.put(discription, "掉线重连,玩的过程中掉线");
+		return roomInfoJSONObject;
+	}
+
+	
+	/**
+	 * 得到房间里的庄家id
+	 * @param list
+	 * @return
+	 */
+	public static int getBankUserId(List<User> list){
+		for(int i=0;i<list.size();i++){
+			User user = list.get(i);
+			if(user.isBanker()==true){
+				return user.getId();
+			}
+		}
+		logger.fatal("难道说没有庄家吗??????????????");
+		return -1;
+	}
+	
+	
+	
+	
+	/**检测用户是否在房间里
+	 * @return
+	 */
+	public boolean checkUserIsInRoom(User user){
+		String roomId = user.getRoomId();
+		if(roomId!=null&&!"".equals(roomId)){
+			OneRoom room = RoomManager.getRoomWithRoomId(roomId);
+			if(room!=null){
+				return true;
+			}else{
+				return false;
+			}
+		}else{
+			return false;
+		}
+	}
+	
+	/**真正的进入房间
+	 * @param jsonObject
+	 * @param session
+	 */
+	private void realEnterRoom(JSONObject jsonObject, IoSession session) {
+		Object sroomId = jsonObject.get("roomId");//房间号
+		if(sroomId==null||"".equals(sroomId)){
+			JSONObject errorJsonObject = new JSONObject();
+			errorJsonObject.put(method, "enterRoom");
+			errorJsonObject.put(discription, "请输入房间号");
+			errorJsonObject.put(code, "error");
+			NotifyTool.notify(session, errorJsonObject);
+			return;
+		}
+		int roomId = jsonObject.getInt("roomId");
+		OneRoom oneRoom = RoomManager.getRoomMap().get(roomId+"");
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put("method", "enterRoom");
+		User user = (User)session.getAttribute("user");
+		boolean userCanEnterRoom = isUserCanEnterRoom(user, oneRoom, session);
+		if(userCanEnterRoom){
+			int size = oneRoom.getUserList().size(); 
+			if(size<4){//房间人数小于4人
+				setUserDircetion(user, oneRoom);//设置用户的方向
+				user.setRoomId(roomId+"");
+				user.setCurrentGame(0);
+				user.setAuto(false);
+				oneRoom.addUser(user);
+				getRoomInfo(outJsonObject,oneRoom);
+				outJsonObject.put("code", "success");
+				NotifyTool.notify(session, outJsonObject);//通知他本人房间里的信息
+				notifyOtherUserEnterRoom(oneRoom, user);
+			}else if(oneRoom.getUserList().size()>=4){
+				outJsonObject.put("code", "error");
+				outJsonObject.put("description", "房间已满");
+				session.write(outJsonObject.toString());
+			}
+		}
+	}
+	
+	
+	/**通知其他玩家，有人进入房间
+	 * @param oneRoom
+	 * @param currentUser
+	 */
+	public static void notifyOtherUserEnterRoom(OneRoom oneRoom,User currentUser){
+		List<User> userList = oneRoom.getUserList();
+		JSONObject jsonObject = new JSONObject();
+		jsonObject.put(method, "notifyOtherUserEnterRoom");
+		int userId = currentUser.getId();
+		jsonObject.put("userId", userId);
+		String userName = currentUser.getUserName();
+		boolean ready = currentUser.isReady();
+		jsonObject.put("userName", userName);
+		jsonObject.put("ready", ready);
+		jsonObject.put("headimgurl", currentUser.getHeadimgurl());
+		jsonObject.put("dirction", currentUser.getDirection());
+		String ipAddress = currentUser.getIoSession().getRemoteAddress().toString();
+		jsonObject.put("ip", ipAddress.replaceAll("/", ""));
+		for (int i = 0; i < userList.size(); i++) {
+			User user = userList.get(i);
+			if(user.getId()!=currentUser.getId()){
+				IoSession ioSession = user.getIoSession();
+				NotifyTool.notify(ioSession, jsonObject);
+			}
+		}
+	}
+	
+	
+	
+	/**检测用户是否可以进入房间
+	 * @param user  被检测的用户
+	 * @param oneRoom 房间
+	 * @param session 
+	 * @return
+	 */
+	public boolean isUserCanEnterRoom(User user,OneRoom oneRoom,IoSession session){
+		boolean result = true;//可以进入房间
+		JSONObject outJsonObject = new JSONObject();
+		if(oneRoom==null){
+			outJsonObject.put("method", "enterRoom");
+			outJsonObject.put("code", "error");
+			outJsonObject.put("description", "房间不存在");
+			session.write(outJsonObject.toString());
+			return false;
+		}
+		
+		boolean userInRoom = isUserInRoom(oneRoom, user);
+		if(userInRoom){
+			getRoomInfo(outJsonObject, oneRoom);
+			outJsonObject.put("method", "enterRoom");
+//			outJsonObject.put("code", "error");
+//			outJsonObject.put("method", "enterRoom");
+//			outJsonObject.put("description", "你已经进入房间，何必重复进入");
+			session.write(outJsonObject.toString());
+			return false;
+		}
+		return result;
+	}
+	
+	
+	/**检验用户是否在这个房间里 
+	 * @param oneRoom
+	 * @param user
+	 * @return
+	 */
+	public boolean isUserInRoom(OneRoom oneRoom,User user){
+		//查看该用户是否已经在房间里
+		List<User> userList = oneRoom.getUserList();
+		for(int i=0;i<userList.size();i++){
+			User u = userList.get(i);
+			if(user.getId() == u.getId()){
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	
+	
+	/**设置用户在房间的方向
+	 * @param user
+	 * @param userSize
+	 */
+	public void setUserDircetion(User user,OneRoom oneRoom){
+		Set<String> directionSet = oneRoom.getDirectionSet();
+		if(!directionSet.contains("north")){
+			user.setDirection("north");
+			directionSet.add("north");
+		}else if(!directionSet.contains("west")){
+			user.setDirection("west");
+			directionSet.add("west");
+		}else if(!directionSet.contains("south")){
+			user.setDirection("south");
+			directionSet.add("south");
+		}
+	}
+
+	/**得到房间的信息
+	 * @param outJsonObject
+	 * @param session
+	 * @param oneRoom
+	 */
+	private static void getRoomInfo(JSONObject outJsonObject,
+			OneRoom oneRoom) {
+		List<User> userList = oneRoom.getUserList();
+		JSONArray userArray = new JSONArray();
+		for(int i=0;i<userList.size();i++){
+			JSONObject userJsonObject = new JSONObject();
+			User user = userList.get(i);
+			int userId = user.getId();
+			userJsonObject.put("userId", userId);
+			String userName = user.getUserName();
+			boolean ready = user.isReady();
+			userJsonObject.put("userName", userName);
+			userJsonObject.put("headimgurl", user.getHeadimgurl());//头像
+			userJsonObject.put("ready", ready);
+			userJsonObject.put("dirction", user.getDirection());
+			userJsonObject.put("sex", user.getSex());
+			userJsonObject.put("ip", user.getIoSession().getRemoteAddress());//IP地址
+			userArray.put(userJsonObject);
+		}
+		outJsonObject.put("users",userArray);
+		outJsonObject.put("zhama", oneRoom.getZhama());
+		outJsonObject.put("total", oneRoom.getTotal());
+		outJsonObject.put("roomId",oneRoom.getRoomNumber());
+	}
+
+	/**准备游戏
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void readyGame(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		String roomId = user.getRoomId();
+		if (roomId==null||"".equals(roomId)){
+			NotifyTool.notifyUserErrorMessage(session,"请先进入房间");
+			return;
+		}
+		OneRoom oneRoom = RoomManager.getRoomMap().get(roomId);
+		List<User> userList = oneRoom.getUserList();
+		for(User u:userList){
+			if(user.getId()==u.getId()){
+				u.setReady(true);
+				break;
+			}
+		}
+		JSONObject outJsonObject = getReadyJsonObject(user);
+		NotifyTool.notifyIoSessionList(oneRoom.getUserIoSessionList(), outJsonObject);
+		int totalReady = getTotalReady(userList);
+		if(totalReady==4){//开始游戏
+			startGame(oneRoom,session);
+		}
+	}
+
+	/**得到准备jsonObject
+	 * @param user
+	 * @return
+	 */
+	public static JSONObject getReadyJsonObject(User user) {
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put("direction", user.getDirection());
+		outJsonObject.put("ready", true);
+		outJsonObject.put("method", "readyGame");
+		outJsonObject.put(discription, "准备游戏");
+		return outJsonObject;
+	}
+	
+	/**开始游戏
+	 * @param oneRoom
+	 */
+	private void startGame(OneRoom oneRoom,IoSession session) {
+		if(!oneRoom.isPay()){
+			//扣除房卡
+			deductionBankUserCard(oneRoom);
+			oneRoom.setPay(true);
+		}
+		beginGame(oneRoom);//开始游戏
+	}
+
+	/**扣除房主的放开,如果是16局扣除2张,8局扣除1张
+	 * @param oneRoom
+	 */
+	private void deductionBankUserCard(OneRoom oneRoom) {
+		List<User> userList = oneRoom.getUserList();
+		int userCard = 0;
+		for(int i=0;i<userList.size();i++){
+			User user = userList.get(i);
+			if(user.getId() == oneRoom.getCreateUserId()){//扣除这个人的房卡
+				HashMap<String, Object> map = new HashMap<>();
+				map.put("roomId", oneRoom.getRoomNumber());//房间号
+				map.put("userId", user.getId());//用户id
+				map.put("totalGame", oneRoom.getTotal());//总局数
+				map.put("type", 1);//充值0,消费 1
+				map.put("total",0);//充值的房卡数量
+				userCard = roomDao.userConsumeCard(map);
+				JSONObject outJsonObject = new JSONObject();
+				outJsonObject.put(method, "getUserCard");
+				outJsonObject.put(discription, "剩余的房卡数");
+				outJsonObject.put("userCard", userCard);
+				notifyUserInfo(outJsonObject,user.getIoSession());
+				break;
+			}
+		}
+	}
+
+	/**通知用户的房卡信息
+	 * @param outJsonObject
+	 * @param ioSession
+	 */
+	private void notifyUserInfo(JSONObject outJsonObject, IoSession ioSession) {
+		ioSession.write(outJsonObject.toString());
+	}
+
+	/**开始游戏
+	 * @param oneRoom
+	 */
+	public void beginGame(OneRoom oneRoom) {
+		Game game = getGame(oneRoom);
+		game.setGameStatus(GAGME_STATUS_OF_IS_GAMING);//游戏进行中
+		game.playGame();
+		int step = game.getStep();
+		notifyUserStartGame(game);//通知用户开启游戏
+		String nowDirection = getFirstDrection(oneRoom);//得到第一次出牌的方向
+		//设置第一次庄家的出牌时间 
+		setBankUserFirstPlayCard(oneRoom);
+		//设置用户的的准备状态为未准备
+		setUserReadyFalse(oneRoom);
+		//开启一个线程监听该用户是否出牌
+		game.getGameStatusMap().put(game.getAlreadyTotalGame()+1, "START");
+		CountDownThread countDownThread = new CountDownThread(oneRoom.getId()+"",game.getAlreadyTotalGame()+1);
+		Thread thread = new Thread(countDownThread);
+		thread.start();
+		//查看第一个用户是否是托管状态
+		boolean bankUserIsAuto = getBankUserIsAuto(oneRoom);
+		if(bankUserIsAuto){//如果庄家托管
+			int status = game.getStatus();
+			if(status==GAGME_STATUS_OF_CHUPAI){
+				PlayGameService.autoChuPai(game);
+			}else if(status==GAGME_STATUS_OF_ANGANG){
+				PlayGameService.autoAnGang(game);
+			}
+		}
+	}
+
+
+	/**得到游戏如果是第一句则创建游戏，否则从GameManager中获取
+	 * @param roomId
+	 * @return
+	 */
+	private Game getGame(OneRoom oneRoom) {
+		Game game = GameManager.getGameWithRoomNumber(oneRoom.getId()+"");
+		if(game!=null){
+			return game;
+		}else{
+			game = new Game(oneRoom);//创建一个游戏
+			GameManager.addGameMap(oneRoom.getId()+"", game);//用 gameMap管理这个游戏
+			return game;
+		}
+	}
+	
+	
+	
+	/**得到庄家是不是托管
+	 * @param oneRoom
+	 * @return
+	 */
+	public boolean getBankUserIsAuto(OneRoom oneRoom){
+		List<User> userList = oneRoom.getUserList();
+		for(int i=0;i<userList.size();i++){
+			User user = userList.get(i);
+			if(user.isBanker()){
+				user.setUserCanPlay(true);
+				return user.isAuto();
+			}
+		}
+		return false;
+	}
+	
+	
+	/**通知用户开启游戏
+	 * @param oneRoom
+	 * @param game 
+	 */
+	public static void notifyUserStartGame(Game game) {
+		OneRoom oneRoom = game.getRoom();
+		List<User> userList = oneRoom.getUserList();
+		Map<String, User> seatMap = game.getSeatMap();
+		User firstUser = seatMap.get(game.getDirec());
+		game.setStatus(GAGME_STATUS_OF_CHUPAI);//出牌的状态
+		for(int i=0;i<userList.size();i++){
+			JSONObject outJsonObject = new JSONObject();
+			User user = userList.get(i);
+			if(user.isBanker()){//如果是庄家,检测是否可以暗杠
+				List<Integer> userCanAnGang = PlayGameService.isUserCanAnGang(user);
+				if(userCanAnGang.size()>0){
+					outJsonObject.put("isCanGangType", AN_GANG);
+					outJsonObject.put("anGangcards", userCanAnGang);
+					game.setStatus(GAGME_STATUS_OF_ANGANG);//暗杠的状态
+					game.setAnGangCards(userCanAnGang);
+					game.setCanAnGangUser(user);//可以暗杠的玩家
+				}
+			}
+			List<Integer> cards = user.getCards();
+			outJsonObject.put("userName",user.getUserName());
+			outJsonObject.put("cards", cards);//该用户的牌
+			outJsonObject.put("userId", firstUser.getId());
+			outJsonObject.put("direction", game.getDirec());
+			outJsonObject.put(discription, "游戏已开始");
+			outJsonObject.put("zhuang", firstUser.getDirection());//庄
+			outJsonObject.put("method", "startGame");
+			outJsonObject.put("currentGame", user.getCurrentGame());
+			NotifyTool.notify(user.getIoSession(), outJsonObject);
+		}
+	}
+
+	
+	
+	
+	/**设置庄家第一次出牌的时间
+	 * @param oneRoom
+	 */
+	private void setBankUserFirstPlayCard(OneRoom oneRoom) {
+		List<User> userList = oneRoom.getUserList();
+		for(User user : userList){
+			if(user.isBanker()){
+				user.setLastChuPaiDate(new Date());
+				break;
+			}
+		}
+	}
+
+	/**设置房间里的人的准备状态为未准备
+	 * @param oneRoom
+	 */
+	public void setUserReadyFalse(OneRoom oneRoom){
+		List<User> userList = oneRoom.getUserList();
+		for(User user:userList){
+			user.setReady(false);
+		}
+	}
+	
+	/**通知玩家游戏已经开始
+	 * @param session
+	 */
+	private void noticeUserGameAlreadyStart(IoSession session) {
+		session.write("游戏已经开始，请不要在点击准备");
+	}
+
+
+
+	/**检测房间是否已经使用
+	 * @param oneRoom
+	 * @return
+	 */
+	private boolean checkRoomIsUse(OneRoom oneRoom) {
+		
+		boolean isUse = oneRoom.isUse();
+		
+		return isUse;
+	}
+
+	/**
+	 * @param oneRoom
+	 * @return
+	 */
+	public static String getFirstDrection(OneRoom oneRoom){
+		List<User> userList = oneRoom.getUserList();
+		for(int i=0;i<userList.size();i++){
+			User user = userList.get(i);
+			if(user.isBanker()){
+				return user.getDirection();
+			}
+		}
+		return "";
+	}
+	
+	
+	/**通知其他玩家
+	 * @param userList
+	 * @return
+	 */
+	private int getTotalReady(List<User> userList) {
+		int totalReady = 0;
+		for(int i=0;i<userList.size();i++){
+			User u = userList.get(i);
+			if(u.isReady()==true){
+				totalReady ++;
+			}
+		}
+		return totalReady;
+	}
+
+
+	/**得到我自己的信息
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void getMyInfo(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		String roomId = user.getRoomId();
+		if(roomId==null||"".equals(roomId)){
+			session.write("啥都没有");
+			return;
+		}
+		Map<String, Game> gameMap = GameManager.getGameMap();
+		Game game = gameMap.get(roomId);
+		Map<String, User> seatMap = game.getSeatMap();
+		User user2 = seatMap.get(user.getDirection());
+		List<Integer> cards1 = user.getCards();
+		List<Integer> cards2 = user2.getCards();
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put("sessionCards", cards1);
+		outJsonObject.put("GameManagerCards", cards2);
+		session.write(outJsonObject.toString());
+		
+		StringBuffer sb = new StringBuffer("  ");
+		for(int i=0;i<cards1.size();i++){
+			Integer card = cards1.get(i);
+			String cardType = CardsMap.getCardType(card);
+			sb.append(cardType+"");
+		}
+		
+		StringBuffer sb2 = new StringBuffer("  ");
+		for(int i=0;i<cards2.size();i++){
+			Integer card = cards1.get(i);
+			String cardType = CardsMap.getCardType(card);
+			sb2.append(cardType+"");
+		}
+		session.write("  sessionCards:"+sb+"   GameManagerCards:"+sb2);
+	}
+
+
+
+	/**离开房间
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void leaveRoom(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		leave(user);
+	}
+
+	private void leave(User user) {
+		OneRoom room = getUserRoom(user);
+		if(room==null){
+			//FIXME  这里需要封装成解散房间的算法-------------------------------------------------
+			JSONObject jsonObject = new JSONObject();
+			jsonObject.put(method, "disbandRoom");
+			jsonObject.put(code, "success");
+			jsonObject.put(discription, "离开房间成功");
+			NotifyTool.notify(user.getIoSession(), jsonObject);
+			return;
+		}
+		Set<String> directionSet = room.getDirectionSet();
+		directionSet.remove(user.getDirection());
+		notifyUserLeaveRoom(room,user);
+		user.setRoomId(null);
+		room.userLeaveRoom(user);//用户离开房间
+		user.setDirection(null);
+		user.setReady(false);
+	}
+	
+	
+	/**
+	 * 用户离开房间
+	 */
+	public void leaveRoom(User user){
+		leave(user);
+	}
+	
+	
+	
+	/**得到当前游戏玩家的方向
+	 * @param user
+	 * @return
+	 */
+	public OneRoom getUserRoom(User user){
+		String roomId = user.getRoomId();
+		OneRoom oneRoom = RoomManager.getRoomMap().get(roomId);
+		return oneRoom;
+	}
+
+	/**通知房间的玩家离开游戏
+	 * @param room 当前的房间
+	 * @param user 离开的玩家
+	 */
+	private void notifyUserLeaveRoom(OneRoom room, User user) {
+		List<User> userList = room.getUserList();
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put(method, "leaveRoom");
+		outJsonObject.put(direction, user.getDirection());
+		outJsonObject.put("userId", user.getId());
+		for(User u:userList){
+			IoSession ioSession = u.getIoSession();
+			NotifyTool.notify(ioSession, outJsonObject);
+		}
+	}
+
+
+	/**房主解散房间
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void disbandRoom(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		disband(session, user);
+	}
+
+	private void disband(IoSession session, User user) {
+		int roomId = Integer.parseInt(user.getRoomId());
+		OneRoom oneRoom = RoomManager.getRoomMap().get(roomId+"");
+		//检测房间是否存在
+		if(oneRoom==null){
+			return;
+		}
+		if(oneRoom.isUse()){
+			JSONObject outJSONbject = new JSONObject();
+			outJSONbject.put(discription, "游戏已开始，开心的玩吧");
+			outJSONbject.put(method, "disbandRoom");
+			outJSONbject.put(code, error);
+			NotifyTool.notify(session, outJSONbject);;
+			return;
+		}
+		
+		int createUserId = oneRoom.getCreateUserId();
+		if(createUserId!=user.getId()){
+			JSONObject outJSONbject = new JSONObject();
+			outJSONbject.put(discription, "只有房主可以解散房间");
+			outJSONbject.put(method, "disbandRoom");
+			outJSONbject.put(code, error);
+			NotifyTool.notify(session, outJSONbject);;
+			return;
+		}
+		List<User> userList = oneRoom.getUserList();
+		for(int i=0;i<userList.size();i++){
+			User u = userList.get(i);
+			JSONObject outJSONbject = new JSONObject();
+			outJSONbject.put(method, "disbandRoom");
+			outJSONbject.put(code, success);
+			if(u.getId()!=user.getId()){
+				outJSONbject.put(discription, "房主已经解散房间");
+			}else{
+				outJSONbject.put(discription, "房间已解散不扣房卡");
+			}
+			NotifyTool.notify(u.getIoSession(), outJSONbject);
+		}
+		//从RoomManager中移除房间 
+		RoomManager.removeOneRoomByRoomId(roomId+"");
+		user.setRoomId("");
+		user.setBanker(false);
+	}
+
+
+
+	/**继续游戏
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void continueGame(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		String roomId = user.getRoomId();
+		Game game = PlayGameService.getGame(user);
+		int currentGame = game.getAlreadyTotalGame()+1;
+		OneRoom oneRoom = RoomManager.getRoomMap().get(roomId);
+		List<User> userList = oneRoom.getUserList();
+		JSONObject outJSONObject = new JSONObject();
+		outJSONObject.put("currentGame", currentGame);//当前的局数
+		JSONArray userArray =  new JSONArray();
+		for(User u:userList){
+			JSONObject userJson = new JSONObject();
+			userJson.put("userId", u.getId());
+			userJson.put(direction, u.getDirection());
+			userJson.put("userName", u.getNickName());
+			userJson.put("ready",u.isReady() );
+			userArray.put(userJson);
+		}
+		outJSONObject.put("users", userArray);
+		outJSONObject.put(method, "continueGame");
+		NotifyTool.notify(session, outJSONObject);
+	}
+
+
+	/**设置托管
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void settingAuto(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		boolean auto = user.isAuto();
+		if(!auto){
+			//如果游戏已经开始，则设置游戏里面的用户托管，否则设置,房间里的用户托管
+			Game game = GameManager.getGameWithRoomNumber(user.getRoomId());
+			if(game!=null){
+				setGamingUserAuto(game,user);
+			}else{
+				setRoomUserStatus(user, true);
+			}
+		}
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put(method, "settingAuto");
+		outJsonObject.put(discription, "设置托管成功");
+		outJsonObject.put("userId", user.getId());
+		outJsonObject.put(direction, user.getDirection());
+		OneRoom oneRoom = RoomManager.getRoomMap().get(user.getRoomId());
+		//如果房间为空，说明已经离开房间了
+		if(oneRoom==null){
+			session.write(outJsonObject);
+			return;
+		}
+		oneRoom.noticeUsersWithJsonObject(outJsonObject);
+		//如果当前游戏的方向移动到该玩家的方向,则自动替他出牌,或杠牌,或碰牌
+		palyIfTheGameDirectionIsMyDirection(user);
+	}
+
+	/**设置游戏中的玩家准备
+	 * @param game
+	 * @param user
+	 */
+	private void setGamingUserAuto(Game game, User user) {
+		Map<String, User> seatMap = game.getSeatMap();
+		if(seatMap!=null){
+			User seatMapUser = seatMap.get(user.getDirection());
+			seatMapUser.setAuto(true);
+			user.setAuto(true);
+		}
+	}
+
+	/**设置房间里的玩家是否托管
+	 * @param user
+	 * @param status true准备,false取消准备
+	 */
+	private void setRoomUserStatus(User user,boolean status) {
+		Map<String, OneRoom> roomMap = RoomManager.getRoomMap();
+		OneRoom oneRoom = RoomManager.getRoomWithRoomId(user.getRoomId());
+		if(oneRoom==null){
+			return;
+		}
+		List<User> userList = oneRoom.getUserList();
+		for(int i=0;i<userList.size();i++){
+			User u = userList.get(i);
+			if(u.getId()==user.getId()){
+				u.setAuto(status);
+				user.setAuto(status);
+			}
+		}
+	}
+
+	
+	/**如果当前游戏的方向移动到该玩家的方向,则自动替他出牌,或杠牌,或碰牌
+	 * @param user
+	 */
+	private void palyIfTheGameDirectionIsMyDirection(User user) {
+		Game game = PlayGameService.getGame(user);
+		if(game!=null){
+			String gameDirection = game.getDirec();
+			if(gameDirection!=null&&gameDirection.equals(user.getDirection())){
+				int status = game.getStatus();
+				switch (status) {
+				case GAGME_STATUS_OF_CHUPAI:
+						PlayGameService.autoChuPai(game);//出牌s
+					break;
+				case GAGME_STATUS_OF_PENGPAI:
+				case GAGME_STATUS_OF_GANGPAI:
+					PlayGameService.autoPengOrGang(user, game);
+					break;	
+				case GAGME_STATUS_OF_ANGANG:	
+					PlayGameService.autoAnGang(game);
+					break;
+				case GAGME_STATUS_OF_GONG_GANG:	
+					PlayGameService.autoGongGang(game);
+					break;
+				}
+			}
+		}
+	}
+
+
+	/**取消托管
+	 * @param jsonObject
+	 * @param session
+	 */
+	public void cancelAuto(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		setRoomUserStatus(user, false);
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put(method, "cancelAuto");
+		outJsonObject.put(discription, "取消托管成功");
+		outJsonObject.put("userId", user.getId());
+		outJsonObject.put(direction, user.getDirection());
+		OneRoom oneRoom = RoomManager.getRoomMap().get(user.getRoomId());
+		//防止用户卡死在房间里面点击托管
+		if(oneRoom==null){
+			session.write(outJsonObject);
+			return;
+		}
+		oneRoom.noticeUsersWithJsonObject(outJsonObject);
+	}
+	
+	@Test
+	public void test(){
+		JSONObject outJsonObject = new JSONObject();
+		outJsonObject.put(method, "cancelAuto");
+		outJsonObject.put(discription, "设置托管成功");
+		outJsonObject.put("userId", 1);
+		outJsonObject.put(direction, "east");
+		System.out.println(outJsonObject);
+	}
+
+
+	@Override
+	public void playGame(JSONObject jsonObject, IoSession session) {
+		playGameService.playGame(jsonObject, session);
+	}
+
+	@Override
+	public void downGameInfo(JSONObject jsonObject, IoSession session) {
+		User user = (User) session.getAttribute("user");
+		JSONObject roomInfo = getRoomInfo(user);
+		nofiyUserRoomInfo(roomInfo,user);
+//		Game game = GameManager.getGameWithRoomNumber(user.getRoomId());
+		OneRoom oneRoom = RoomManager.getRoomWithRoomId(user.getRoomId());
+		replaceUserIoSession(user, oneRoom);
+	}
+
+	
+	@Override
+	public void disbandRoom(User user) {
+		disband(user.getIoSession(), user);
+	}
+
+}
