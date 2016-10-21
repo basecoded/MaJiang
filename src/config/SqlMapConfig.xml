@@ -20,10 +20,10 @@
 	     		<dataSource type="POOLED">
 	     		<!-- <dataSource type="com.zxz.dao.C3P0DataSourceFactory"> -->
 	     			<property name="driver" value="com.mysql.jdbc.Driver"/>
-     		 		<property name="url" value="jdbc:mysql://101.201.115.208:3306/mj?characterEncoding=utf8"/>
+     		 		<property name="url" value="jdbc:mysql:///mj?characterEncoding=utf8"/>
      		 		<!-- <property name="url" value="jdbc:mysql://localhost:3306/mj?characterEncoding=utf8"/> -->
      		 		<property name="username" value="root"/>
-     		 		<property name="password" value="mypwd"/>
+     		 		<property name="password" value=""/>
      		 		<!-- <property name="password" value="gushuang"/> -->
      		 		<!-- <property name="driverClass" value="com.mysql.jdbc.Driver" />
 					<property name="jdbcUrl" value="jdbc:mysql://localhost:3306/mj?characterEncoding=utf8" />
